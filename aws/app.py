@@ -36,7 +36,7 @@ def blog_generate_using_bedrock(blogtopic: str) -> str:
         response_data = json.loads(response_content)
 
         # Extracting the generated blog text from the response
-        blog_details = response_data['results'][0]['outputText']  # Assuming 'outputText' contains the blog text
+        blog_details = response_data['results'][0]['outputText']  #  'outputText' contains the blog text
         return blog_details
 
     except Exception as e:
