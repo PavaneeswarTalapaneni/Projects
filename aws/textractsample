@@ -1,0 +1,97 @@
+import json
+import boto3
+import os
+import time
+from botocore.exceptions import ClientError
+
+# AWS clients
+s3_client = boto3.client('s3')
+textract_client = boto3.client('textract')
+
+# Define the Lambda handler
+def lambda_handler(event, context):
+    try:
+        # Get the bucket and file name from the event
+        bucket_name = event['Records'][0]['s3']['bucket']['name']
+        file_name = event['Records'][0]['s3']['object']['key']
+        
+        print(f"Processing file: {file_name} from bucket: {bucket_name}")
+        
+        # Call Textract to extract text and tables from the document
+        extracted_data = extract_text_tables(bucket_name, file_name)
+        
+        # Assuming we have original and audit files named in a specific format
+        if "original" in file_name:
+            # Save original extracted data for comparison
+            save_to_s3(bucket_name, 'processed/original.json', extracted_data)
+        elif "audit" in file_name:
+            # Get original extracted data for comparison
+            original_data = get_from_s3(bucket_name, 'processed/original.json')
+            audit_data = extracted_data
+            
+            # Compare the original and audit data
+            comparison_result = compare_documents(original_data, audit_data)
+            
+            # Save the comparison result to S3
+            save_to_s3(bucket_name, 'results/comparison_result.json', comparison_result)
+        
+    except Exception as e:
+        print(f"Error processing file: {str(e)}")
+        raise e
+
+def extract_text_tables(bucket_name, file_name):
+    # Call Textract to analyze document
+    response = textract_client.analyze_document(
+        Document={
+            'S3Object': {
+                'Bucket': bucket_name,
+                'Name': file_name
+            }
+        },
+        FeatureTypes=["TABLES"]
+    )
+    
+    # Extract text and tables from Textract response
+    extracted_data = {
+        'text': "",
+        'tables': []
+    }
+    
+    for block in response['Blocks']:
+        if block['BlockType'] == 'LINE':
+            extracted_data['text'] += block['Text'] + '\n'
+        elif block['BlockType'] == 'TABLE':
+            extracted_data['tables'].append(block)
+    
+    return extracted_data
+
+def compare_documents(original_data, audit_data):
+    # Perform comparison of transactions, tables, and expenses
+    comparison_result = {
+        'text_match': original_data['text'] == audit_data['text'],
+        'table_differences': []
+    }
+    
+    # Compare tables from both documents
+    original_tables = original_data['tables']
+    audit_tables = audit_data['tables']
+    
+    if len(original_tables) != len(audit_tables):
+        comparison_result['table_differences'].append("Table count mismatch")
+    else:
+        for i in range(len(original_tables)):
+            if original_tables[i] != audit_tables[i]:
+                comparison_result['table_differences'].append(f"Mismatch in table {i+1}")
+    
+    return comparison_result
+
+def save_to_s3(bucket_name, key, data):
+    s3_client.put_object(Bucket=bucket_name, Key=key, Body=json.dumps(data))
+
+def get_from_s3(bucket_name, key):
+    try:
+        response = s3_client.get_object(Bucket=bucket_name, Key=key)
+        return json.loads(response['Body'].read().decode('utf-8'))
+    except ClientError as e:
+        print(f"Unable to get data from S3: {e}")
+        raise e
